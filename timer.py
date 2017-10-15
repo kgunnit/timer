@@ -8,42 +8,107 @@ import time
 import re
 from datetime import datetime
 from datetime import timedelta
+from enum import Enum
+
+#CSV format: id|task|created|status|statustime||elapsed|tags|project
+
+class Status(Enum):
+  '''Available status types for a task'''
+  new = 'New' # When a task is created, but has not started (no elapsed time)
+  active = 'Active'  # A task that is currently active (time is ticking)
+  stopped = 'Paused' # A task that was previously started, but now paused
+  completed = 'Completed' # A task that has been completed
 
 class Task:
   '''Create a item of type Task.  Task contains:
-     name of the task
+     id of the task (unique)
+     description of the task
+     created date task was created
      status of the task
-     timestamp (of time.time()) of last activity
-     elapsed time'''
+     statustime (time of status change. In other words, time task was started or completed)
+     elapsed time (time elapsed while task was active - in effect, the time spent on the task thus far) Only update when status changes from active
+     tags (adds meta data to a task)
+     project (add tasks to a specific project)
+     '''
 
   def __init__(self):
-    self.name = ''
-    self.status = ''
-    self.timestamp = ''
-    self.elapsed = ''
-  
-  def getElapsedTime(self,returnMS=False) :
-    '''Get (calculate) the time elapsed since the task has been started (time is stopped while a task is paused). Boolean to return microseconds.'''
+    self.id = -1
+    self.descr = ''
+    self.created = time.time()
+    self.status = Status.new
+    self.statusTime = ''
+    self.elapsed = 0
+    self.tags = ''
+    self.project = ''
+ 
+  def validate(self):
+    '''Validate values in task'''
+    if "|" in self.descr :
+      sys.exit("Error: Task description contained illegal character: |\nProgram terminated")
+    if self.descr == '' :
+      sys.exit('Error: Task description is blank. Program terminated')
+    if self.id == -1 :
+      sys.exit("Error: Task id undetermined, program terminated")
+    if not (self.status == Status.new or self.status == Status.stopped or self.status == Status.active or self.status == Status.completed) :
+      sys.exit("Error: Task contains invalid status. Program terminated")
 
-    if type(self.elapsed) is str:
-        self.elapsed = self.parseTimeDelta(self.elapsed)
+  def getElapsedTime(self) :
+    '''Get (calculate) the time elapsed since the task has been started (time is stopped while a task is paused)'''
 
-    if self.status == 'In Progress' :
-      elapsedTime = datetime.fromtimestamp(time.time()) - self.getLastUpdate()
-      if self.elapsed > self.parseTimeDelta('00:00:00') :
-        elapsedTime += self.parseTimeDelta(self.elapsed)
+    if self.status == Status.Active :
+      elapsedTime = datetime.fromtimestamp(time.time()) - datetime.fromtimestamp(float(self.statusTime))
+      elapsedTime += parseTimeDelta(self.elapsed)
     else :
-      elapsedTime = self.elapsed 
+      elapsedTime = self.elapsed
+    return elapsedTime
+
+  def start(self) :
+     self.status = Status.active 
+     self.statusTime = time.time()
+
+  def stop(self) :  
+    if self.status == Status.active :
+      self.elapsed = self.getElapsedTime()
+      self.status = Status.stopped 
+      self.statusTime = time.time()
    
-    if not returnMS :
-      elapsedTime = elapsedTime - timedelta(microseconds=elapsedTime.microseconds)
+    self.printStatus()
+ 
+  def complete() :
+    if self.status != Status.completed :
+      if self.status == Status.active :
+        self.stopTask()
+      self.status = Status.completed
+      self.statusTime = time.time()
 
-    return elapsedTime 
+    self.printStatus()
 
-  def getLastUpdate(self):
-    return datetime.fromtimestamp(float(self.timestamp))
+  def modify(modifiedTask) :
+    if self.status != Status.completed :
+      self.descr = modifiedTask.descr
+      self.tags = modifiedTask.tags
+      self.project = modifiedTask.project
 
-  def parseTimeDelta(self, s):
+      self.printStatus()
+    else :
+      sys.exit("Task is already completed, can't modify completed tasks")
+
+
+  def printStatus(self) : 
+    '''Print the status of the task (includes all of the task details)'''
+    print(' ')  
+    print('Task id:  ', self.id)
+    print('Description:  ', self.descr)
+    print('Task Created:  ', self.created)
+    print('Status:  ', self.status)
+    if self.status == Status.completed :
+      print('Task Completed:  ', self.statusTime)
+    print('Elapsed time:  ', self.getElapsedTime())
+    print('Tags:  ', self.tags)
+    print('Project:  ', self.project)
+    print(' ')
+
+  def parseTimeDelta(s):
     """Create timedelta object representing time delta
        expressed in a string
    
@@ -64,396 +129,207 @@ class Task:
     return timedelta(**dict(( (key, int(value))
                               for key, value in d.items() )))
 
+class TaskList:
+  '''Class for creating a list of tasks'''
 
-  def printStatus(self) : 
-    '''Print the status of the task (includes all of the task details)'''
-    print(' ')  
-    print('Task Name:  ', self.name)
-    print('Status:  ', self.status)
-    print('Last Update:  ', self.getLastUpdate().strftime("%Y-%m-%d %H:%M:%S"))
-    print('Elapsed Time:  ', self.getElapsedTime(True))
-    print(' ')
+  def __init__(self):
+    self.tasks = []
 
-def addTask(tname, tstatus, ttimestamp, ttotal):
-  '''Add a task to the task list'''
-  newTask = Task()
-  newTask.name = tname
-  newTask.status = tstatus
-  newTask.timestamp = ttimestamp
-  newTask.elapsed = ttotal 
+  def addTask(self, task):
+    task.validate() #before adding task to list, validate values
+    self.tasks.append(task)
+
+  def findTaskID(self, taskId):
+    for task in self.tasks :
+      if task.id == taskId :
+        return task
   
-  taskList.append(newTask)
+  def findTaskDescr(self, taskDescr):
+    for task in self.tasks :
+      if task.descr == taskDescr :
+        return task
 
-def findTask(tname,newStatus,returnAlways=False):
-  '''Look through the tasklist to find the named task.  Task names are unique.  If the user tries to start a task using a name already in use, the task will start if it is paused and not create a new task.'''
+  def getCompleted(self):
+    '''return completed tasks'''
+    completedList = TaskList()
+    for task in self.tasks :
+      if task.status == Status.completed :
+        completedList.addTask(task)
+    return completedList
 
-  x = 0 
-  while x < len(taskList) :
-    if taskList[x].name == tname :
-      if taskList[x].status == newStatus :
-        print(' ')
-        print('The new status for that task is the same as the current status.  No changes made.')
-        taskList[x].printStatus()
-        sys.exit(0)
-      elif taskList[x].status != "Stopped" :
-        return x 
-    x+=1
+  def getActive(self):
+    '''return active tasks'''
+    activeList = TaskList()
+    for task in self.tasks :
+      if task.status == Status.completed :
+       activeList.addTask(task)
+    return activeList
 
-  if returnAlways == True :
-    return -1  
+  def writeTaskCSV(taskList, pathToCSV):
+    '''Write task list items to csv file.  This file is called upon each time the script is launched.'''
 
-  else:
-    print(' ')
-    print('Task "%s" not found!  No changes were made.' % tname)
-    print(' ')
-    sys.exit(0)
+    pathToCSV.write('id|descr|created|status|statusTime|elapsed|tags|project')
+    with open(pathToCSV, 'w') as saveCSV:
+      for taskItem in taskList :  
+        taskItem.validate() #validate task before writing to file
+        saveCSV.write(taskItem.id, '|', taskItem.descr, '|', taskItem.created, '|', taskItem.status, '|', str(taskItem.statustime), '|', str(taskItem.elapsed), '|', taskItem.tags, '|', taskItem.project, '\n')
 
-def pauseTask(tname=''):
-  '''Look through the tasklist to find the task that is currently running, then pause it. If tname is null, then look for any running task and pause it.'''
-
-  x = 0 
-  pauseTask = -1
-
-  while x < len(taskList) :
-    if tname == '' and taskList[x].status == 'In Progress' :
-      print(' ')
-      print('Paused the following task:  ', taskList[x].name)
-      pauseTask = x
-      break;
-    elif taskList[x].name == tname and taskList[x].status != 'Stopped' :
-      pauseTask = x
-      break;
-    
-    x+=1
-
-  if len(taskList) and pauseTask >= 0:
-    taskList[pauseTask].elapsed = taskList[pauseTask].getElapsedTime()
-    taskList[pauseTask].status = 'Paused' 
-    taskList[pauseTask].timestamp = time.time()
-
-    taskList[pauseTask].printStatus()
-
-def removeTask(taskIndex):
-  '''Remove a task (based on given task index) from the task list.'''
-
-  print('')
-  tcount = len(taskList)
-  taskList.pop(taskIndex)
-  
-  if tcount > len(taskList):
-    print('Task Removed')
-  else:
-    print('An error has occurred removing the task.  No changes were made!')     
- 
-def archiveTasks(csvPath):
-  '''Move (via rename) current csv file with current date appended to it. If archive file with same date already exists, append a revision (digit) to the new file. Example: tasks.csv-19700101-1 '''
-  appendTime=datetime.now().strftime("%Y%m%d")
-  archiveCSV = os.path.basename(csvPath) + "-" + appendTime
-  archivePath = os.path.join(os.path.dirname(csvPath), archiveCSV)
-
-  x = 1
-  while os.path.exists(archivePath) :
-    archiveCSV = os.path.basename(csvPath) + "-" + appendTime + "-" + str(x)
-    archivePath = os.path.join(os.path.dirname(csvPath), archiveCSV)
-    x+=1
-    
-  os.rename(csvPath, archivePath)
-
-  if os.path.exists(archivePath) :
-    print(' ')
-    print('Tasks successfully archived to: ', archivePath)
-  else:
-    print(' ')
-    print('An error has occurred while archive. Archive path does not exist: ', archivePath)
-  
-def writeTaskCSV(csvPath):
-  '''Write task list items to csv file.  This file is called upon each time the script is launched.'''
-
-  csvPath = os.path.join(os.path.expanduser("~"),'tasks.csv')
-  
-  with open(csvPath, 'w') as saveCSV:
-    for taskitem in taskList :  
-      taskItem = taskitem.name
-      taskItem += '|'
-      taskItem += taskitem.status
-      taskItem += '|'
-      taskItem += str(taskitem.timestamp)
-      taskItem += '|'
-      taskItem += str(taskitem.elapsed)
-      taskItem += '\n'
-      saveCSV.write(taskItem)    
-
-def startOfWeek(date):
-  '''Returns the date (in datetime) for the start of the week (Sunday)'''
-
-  # subtract days until we reach Sunday (int=6)
-  while date.weekday() != 6 :
-    date = date - timedelta(days=1)
-  
-  return date.replace(hour=00, minute=00, second=00, microsecond=000000)
-
-def startOfMonth(date):
-  '''Returns the date (in datetime) for the start of the month.'''
-
-  date = date.replace(hour=00, minute=00, second=00, microsecond=00, day=1)
-
-  return date
-
-def validateTaskAction(arguments) :
-  '''Parse the arguments provided and look for a valid action and associated task name if needed. Provide an error message if something is missing.'''
-
-  # store the action and taskName items here
-  action = ''
-  taskName = ''
-
-  #taskOptions are commands that require a task
-  #genOptions are comamnds that don't require a task associated with it
-  taskOptions = ('start', 'stop', 'done', 'pause', 'delete', 'rename', 'status')
-  genOptions = ('list', 'time', 'archive')
-
-  #parse arguments and look for relevant information
-  # First, remove this from arguments since we won't be needing it
-  arguments.pop(0)
-
-  # if there are no at this point arguments, then we'll want to show the description
-  if len(arguments) < 1:
-    action = ''
-  # Otherwise, look at first and last item for an action
-  # if found, set to action and remove from arguments since we won't be needing it going forward
-  elif arguments[0] in taskOptions or arguments[0] in genOptions :
-    action = arguments[0].lower()
-    arguments.pop(0)
-  elif arguments[len(arguments)-1] in taskOptions or arguments[len(arguments)-1] in genOptions:
-    action = arguments[len(arguments)-1].lower()
-    arguments.pop(len(arguments)-1)
-
-  # now set the remaining item(s) to the taskName - this allows for spaces in a task item
-  # look at first and last item for an action
-  for arg in arguments:
-    if len(taskName) > 0:
-      taskName += ' '
-    taskName += arg.replace(' ', '')
-  
-  # if task list is empty, only option should be to add a task or display the time 
-  if action == '' :
-    showDescription()
-    sys.exit(0)
-
-  if action != 'start' and action != 'time' and len(taskList) == 0 :
-    print(' ')
-    print('Please add tasks before running other task commands.')
-    print('Use "timer [taskName] start" or "timer start [taskName]" to start a task')
-    print(' ')
-    sys.exit(0)
-
-  # check to see if action is in either option group (genOptions and taskOptions)
-  # at this point we don't care if a task is included or not, we just want to know if the command is valid
-  elif action not in genOptions and action not in taskOptions and len(action) > 0:
-    print(' ')
-    print('Invalid command:  ', action)
-    showDescription()
-    sys.exit(0)
-
-  # check to see if action is in taskOptions and check to make sure a task was included
-  elif action in taskOptions and len(taskName) <= 0 :
-    print(' ')
-    print('This command requires a taskname.  Please include a task name and try again.')
-    print('Usage:  timer [taskname]', action) 
-    print(' ')
-    showDescription()
-    sys.exit(0)
-
-  # everything checks out - return taskName,action
-  else :
-    # if action is set to done, change to stop since we are using both interchangeably
-    if action == 'done' :
-      action = 'stop'
-
-    return taskName,action
+def isInteger(x) :
+  try:
+    int(x)
+    return True
+  except ValueError :
+    return False
 
 def showDescription() :
   '''Show the description and tips for using this script'''
+
   print(' ')
-  print('Timer.py - track tasks that are worked on and the time spent on those tasks.')
+  print('Usage:  ', os.path.basename(sys.argv[0]),' add taskName [+tag|*project]')
+  print('Usage:  ', os.path.basename(sys.argv[0]),' modify taskId [taskName|+tag|*project]')
+  print('Usage:  ', os.path.basename(sys.argv[0]),' [start|stop|done|status] [taskName|taskId] ')
+  print('Usage:  ', os.path.basename(sys.argv[0]),' list [all|new|active|stopped|completed]')
+  print('Usage:  ', os.path.basename(sys.argv[0]),' time')
   print(' ')
   print('Description:')
-  print('Timer.py is meant to keep track of time on various tasks to give insight into how time is being spent and how much time is spent on various tasks. To create a task, simply type "timer [taskName] start". Commands and task names are interchangeable, so "timer start [taskName]" and "timer [taskName] start" are the same thing, they both will start the specified tasks. Task names can be any string, including spaces. The program will look at the first and last argument for the action to perform, the remaining values will be included in the task name. The items are stored in a simple CSV, should you need to manually edit the file or import it elsewhere. A stopped task designates a task that was completed, and since no further action is neeed, it is essentially frozen in time. It cannot be started or removed.  Trying to start a stopped task will result in a new task being created.')
-  print(' ')
-  print('Usage:  timer [taskName] [start|stop|done|pause|status|delete|rename]')
-  print('Usage:  timer [list]')
-  print('Usage:  timer time|archive')
-  print(' ')
-  print('Options:')
   print('  start              Start time on named task')
-  print('  stop,done          Stop time on named task (mark it as done) - this will disable further updates for the given task (essentially freezes the task indefinitely)')
-  print('  pause              Pause time on named task')
+  print('  stop               Stop time on named task - this will then remove the task from the list')
+  print('  pause              Pause time on named task - task will remain in list of tasks')
   print('  status             Show status of named task')
-  print('  delete             Delete the named task from the list')
-  print('  rename             Rename a task (preserves timestamps)')
-  print('  archive            Archive the tasks stored in the csv (rename the csv with date appended to the filename')
   print('  time               Show current time')
-  print(' ')
-  print('Examples:')
-  print('  timer new task start')
-  print('  timer start taskitem')
-  print('  timer archive')
-  print('  timer list')
+  print('  list               Show the list of tasks in the specified status. If status type is excluded, all tasks not completed will be shown')
   print(' ')
   sys.exit(0)
 
+def errors() :
+  '''Set of errors that can occur and their standardized output'''
+
+  def noTasks() :
+    sys.exit('Task list is empty. Please add tasks to the list before trying to start a task.')
+
 def main():
-  '''This script is used to create timers for different tasks.  While a task is in the "In Progress" status, the elapsed time is accrued.  Elapsed time is paused while a task is paused.  Once a task is stopped, the task is removed from the list of tasks and shows the total time spent on the named task.'''
+  '''The main event. First step is to load tasks from csv into a TaskList. Tasks can be called with name or id (unique). Task status can be of Status. Unlike v1 of timer, this version will keep tasks indefinitely in the csv (for recalling completed tasks).'''
 
-  global taskList
-  taskList = []
-  taskName = '' 
-  csvPath = os.path.join(os.path.expanduser("~"),'tasks.csv')
+  taskList = TaskList()
 
-  # load the csv
+  csvPath = os.path.join(os.path.expanduser("~"),'tasks2.csv')
+
+
   if os.path.exists(csvPath) :
     with open(csvPath, 'rb') as taskCSV:
       taskContent = taskCSV.read().splitlines()
     
     for taskRow in taskContent :
-      taskItem = str.split(taskRow.decode('utf-8'),'|') 
-      addTask(taskItem[0],taskItem[1],taskItem[2],taskItem[3]) 
+      taskRaw = str.split(taskRow.decode('utf-8'),'|') 
+      taskItem = Task()
+      try:
+        taskItem.id = int(taskRaw[0])
+      except ValueError :
+        sys.exit('Error: Unable to load id for task. \nData: ', taskRaw, '\nProgram terminated')
 
-  # check to make sure taskDo is valid and requirements are met (task included when needed)
-  # program will end here if invalid command
-  taskName,taskDo = validateTaskAction(sys.argv)
+      taskItem.descr = taskRaw[1]
+      taskItem.created = taskRaw[2]
+      taskItem.status = taskRaw[3]
+      taskItem.statusTime = taskRaw[4]
+      taskItem.elapsed = taskRaw[5]
+      taskItem.tags = taskRaw[6]
+      taskItem.project = taskRaw[7]
 
-  # now that we know action is valid, start processing commands
-  if taskDo == 'list':
-    elapsedTotal = timedelta(0, 0, 0)
+      taskList.addTask(taskItem)
 
-    #format the output - grows/shrinks depending on taskname lengths - keeps everything aligned
-    maxLen = max(len(task.name) for task in taskList)
-    width = maxLen+10
-    output = "{1:<{0}} {2:<15} {3:12} {4:26}".format(width,'Task Name', 'Status', 'Time', 'Last Update')
+
+  # Declare empty variables for arguments
+  taskDo = ''       #  The action to perform (start, stop, etc)
+  task = Task()     #  To store task related arguments
+
+  for arg in sys.argv :
+    if (arg.lower() == 'time' arg.lower() == 'add') or (arg.lower() == 'start') or (arg.lower() == 'stop') or (arg.lower() == 'done') or (arg.lower() == 'modify') or (arg.lower() == 'status') or (arg.lower() == 'list') :
+      taskDo = arg.lower()
+    elif arg.lower()[:1] == '+' :
+      if len(task.tags) > 0 :
+        task.tags = task.tags , ', '
+      task.tags = task.tags , arg
+    elif arg.lower()[:1] == '*' :
+      task.proj = arg
+    else :
+      if isInteger(arg) :  # if arg is int, then set task id (for recalling specific task by id rather than descr)
+        task.id = int(arg)
+      else :  # otherwise, assume non-int is task descr
+        task.descr = arg
+
+  #  Verify that taskDo is a valid action, if not, show program description/hints and exit
+  if taskDo not in ('add', 'time', 'list', 'start', 'stop', 'done', 'modify') :
     print(' ')
-    print(output)
-
-    # create horizontal line and get the length of output from above to set for line
-    hl = '-'
-    while len(hl) < len(output):
-      hl += '-'
-    print(hl)
-    print('')
-    x = 0
-
-    #output the tasks (use same format style from above
-    while x < len(taskList) :
-      output = " {1:<{0}} {2:<15} {3:12} {4:26}".format(width,taskList[x].name, taskList[x].status, str(taskList[x].getElapsedTime()), taskList[x].getLastUpdate().strftime("%Y-%m-%d %H:%M:%S"))
-      print(output)
-      elapsedTotal = elapsedTotal + taskList[x].getElapsedTime()
-      x = x+1
-    
+    print('Invalid command: ', taskDo)
     print(' ')
-    # create totals horizontal line (replace chars for same line as above)
-    print(hl.replace('-', '='))
+    showDescription()
+    sys.exit()
 
-    #output the totals using the same format style
-    output = "{1:<{0}}  {2:<15} {3:12}".format(width, 'Total','', str(elapsedTotal))
-    print(output)
+  
+  if taskDo == 'add' :
+    if task.descr == '':
+      sys.exit('Invalid task description.\nTo add task, use: ', os.path.basename(sys.argv[0]), ' add "task descriptoin"')
+    if not taskList.tasks :
+      task.id = 0
+    else :
+      task.id = taskList.tasks[len(taskList.tasks)-1].id + 1
+    taskList.addTask(task)
+
+  elif taskDo == 'time' :
+    print(' ')
+    print('Current system time is: ')
+    print(' ')
+    print('  ' , datetime.fromtimestamp(time.time()))
+    print(' ')
+
+
+  # If tasklist is empty, stop the program HERE
+  # ANYTHING past this POINT should depend on 1+ item(s) in the list (otherwise add above)
+  elif len(taskList) == 0:
+    sys.exit('Task list is empty. Please add tasks to the list before trying to start a task.')
  
-  #elif taskDo == 'time' :
-    #print(' ')
-    #print('Current system time is: ')
-    #print(' ')
-    #print('  ' , datetime.fromtimestamp(time.time()))
-    #print(' ')
+  elif taskDo == 'list' :
+    elif task.descr == 'new' :
+      ## TODO - list completed tasks
+    elif task.descr == 'active' :
+      ## TODO - list active tasks
+    elif task.descr == 'stopped' :
+      ## TODO - list stopped tasks
+    elif task.descr == 'completed' :
+      ## TODO - list completed tasks
+    else :
+      ## TODO - list all tasks
 
-  elif taskDo == 'archive' :
-    archiveTasks(csvPath)
-   
-  elif taskDo == 'start' :
-    x = findTask(taskName,'In Progress',True)
+  # Get the index of the task within taskList (makes calling the task easier later) 
+  else:
+    taskIndex = -1
+    if task.descr != '':
+      taskIndex = taskList.index(taskList.findTaskDescr(task.descr))
+    elif task.id > -1 :
+      taskIndex = taskList.index(taskList.findTaskId(task.id))
+    else :
+      sys.exit('Unable to search for task. Try again. Use: ', os.path.basename(sys.argv[0]), ' add [id|descr]')
 
-    pauseTask()
+    # if taskIndex is it's default value, exit the program with error
+    if taskIndex == -1 :
+      sys.exit('Unable to find the task. Try again. To view tasks, use: ', os.path.basename(sys.argv[0]), ' list')
 
-    if x >= 0 :   
-     taskList[x].status = 'In Progress' 
-     taskList[x].timestamp = time.time()
+  # START task specific items, such as starting, stopping, or getting status
+  if taskDo == 'start':
+    taskList.index(taskIndex).start()
 
-    else:
-      addTask(taskName, 'In Progress', time.time(), datetime.fromtimestamp(time.time()) - datetime.fromtimestamp(time.time()))
-      print(' ')
-      print('New task created.')
-      x = len(taskList) -1
-   
-    writeTaskCSV(csvPath) 
-    print(' ')
-    print('Task started.')
-    taskList[x].printStatus() 
+  elif taskDo == 'stop':
+    taskList.index(taskIndex).stop()
+
+  elif taskDo == 'done' :
+    taskList.index(taskIndex).complete()
+
+  elif taskDo == 'modify' :
+    taskList.index(taskIndex).modify(task)
 
   elif taskDo == 'status' :
-    x = findTask(taskName,'',False)
-    if x >= 0 :
-      taskList[x].printStatus()
+    taskList.index(taskIndex).printStatus()
 
-  elif taskDo == 'stop' :
-    x = findTask(taskName,'')
-   
-    if taskList[x].status == "In Progress" :
-      taskList[x].elapsed = taskList[x].getElapsedTime()
-      taskList[x].timestamp = time.time()
-    
-    taskList[x].status = "Stopped"
-    taskList[x].printStatus() 
-    
-    writeTaskCSV(csvPath)
-
-  elif taskDo == 'delete':
-    x = findTask(taskName, '')
-
-    print(' ')
-    print('Removing task...')
-
-    print(' ')
-    taskList[x].printStatus()
-
-    removeTask(x)
-    writeTaskCSV(csvPath)
- 
-  elif taskDo == 'rename' :
-    x = findTask(taskName,'Rename')
-
-    print(' ')
-
-    # prompt for new name for task
-    newName = input('Enter the new name for the task "' + taskList[x].name +'":  ')
-
-    #make sure newName is not already used by a task
-    y = findTask(newName,'',True)
-    
-    if y > 0:
-      print(' ')
-      print(' ')
-      print('A task by the name "' + newName + '" already exists.')
-      print(' ')
-      print('No changes were made.')
-      sys.exit(0)
-    else:
-      # task not found, make the change
-      taskList[x].name = newName
-      
-      print(' ')
-      print('Task renamed successfully.')
-      taskList[x].printStatus()
-
-      writeTaskCSV(csvPath)
-
-  elif taskDo == 'pause' :
-    x = findTask(taskName,'Paused')
-   
-    pauseTask(taskList[x].name)
-
-    writeTaskCSV(csvPath)
-
-  print(' ')
-  print(' ')
-  print('System Time:  ' , datetime.strftime(datetime.fromtimestamp(time.time()), "%Y-%m-%d %H:%M:%S"))
-  print(' ')
 
 if __name__ == '__main__':
   main()
